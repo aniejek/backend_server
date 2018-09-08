@@ -27,7 +27,7 @@ namespace Backend
         private const string OPERATION_LOAN = "pozyczka";
 
         private const int MAX_LOAN = 200000;
-        private const float EXPECTED_MONTHLY_INTEREST = 0.01f;
+        private const double EXPECTED_MONTHLY_INTEREST = 0.01f;
 
         private static string GetOperation(string message)
         {
@@ -57,9 +57,9 @@ namespace Backend
             switch (operation)
             {
                 case OPERATION_LOAN:
-                    float quanity = float.Parse(parameters[PARAMETER_QUANITY]);
-                    float interest = float.Parse(parameters[PARAMETER_INTEREST]);
-                    float installment = float.Parse(parameters[PARAMETER_INSTALLMENT]);
+                    double quanity = double.Parse(parameters[PARAMETER_QUANITY]);
+                    double interest = double.Parse(parameters[PARAMETER_INTEREST]);
+                    double installment = double.Parse(parameters[PARAMETER_INSTALLMENT]);
                     string accountNumber = parameters[PARAMETER_ACCOUNT_NUMBER];
                     returnString = LoanService(quanity, interest, installment, accountNumber);
                     break;
@@ -75,10 +75,10 @@ namespace Backend
 
             Console.WriteLine(String.Format("Zwracam wiadomosc: {0}", returnString));
 
-            var responseBytes = Encoding.UTF8.GetBytes(returnString);
-            var replyProps = ((Model)model).CreateBasicProperties();
-            replyProps.CorrelationId = ea.BasicProperties.CorrelationId;
-            ((Model)model).BasicPublish("", ea.BasicProperties.ReplyTo, replyProps, responseBytes);
+            //var responseBytes = Encoding.UTF8.GetBytes(returnString);
+            //var replyProps = model.CreateBasicProperties();
+            //replyProps.CorrelationId = ea.BasicProperties.CorrelationId;
+            //((Model)model).BasicPublish("", ea.BasicProperties.ReplyTo, replyProps, responseBytes);
         }
 
         private static string LoginService(string user, string password)
@@ -96,29 +96,29 @@ namespace Backend
             };
             sqlConnection.Open();
             var cmd = sqlConnection.CreateCommand();
-            cmd.CommandText = String.Format("select password from [dbo.Users] where login = {0}", user);
+            cmd.CommandText = String.Format("select password from users where login = '{0}'", user);
             string gottenPassword = (string)cmd.ExecuteScalar();
             if (gottenPassword != password)
             {
                 return "402";
             }
-            cmd.CommandText = String.Format("select number, account, name, surname from [dbo.Users] where login = {0};", user);
+            cmd.CommandText = String.Format("select number, account, name, surname from users where login = '{0}';", user);
             var executeReader = cmd.ExecuteReader();
             string number = executeReader.GetString(0);
-            float account = executeReader.GetFloat(1);
+            double account = executeReader.GetFloat(1);
             string name = executeReader.GetString(2);
             string surname = executeReader.GetString(3);
-            cmd.CommandText = String.Format("update [dbo.Users] set account={0} where login={1};", account, user);
+            cmd.CommandText = String.Format("update users set account='{0}' where login='{1}';", account, user);
             cmd.ExecuteNonQuery();
             sqlConnection.Close();
             return String.Format("201-{0};{1};{2};{3}", number, account, name, surname);
         }
 
-        private static string LoanService(float quanity, float interest, float installment, string accountNumber)
+        private static string LoanService(double quanity, double interest, double installment, string accountNumber)
         {
             if (quanity != 0 && installment != 0 && interest != 0 && !(accountNumber is null))
             {
-                float expected_interest = EXPECTED_MONTHLY_INTEREST * (1 + quanity / MAX_LOAN);
+                double expected_interest = EXPECTED_MONTHLY_INTEREST * (1 + quanity / MAX_LOAN);
                 if (interest / installment >= expected_interest)
                 {
                     return TakeLoan(accountNumber, quanity, installment, interest);
@@ -127,7 +127,7 @@ namespace Backend
             return "402";
         }
 
-        private static string TakeLoan(string accountNumber, float quanity, float installment, float interest)
+        private static string TakeLoan(string accountNumber, double quanity, double installment, double interest)
         {
             var sqlConnection = new SqlConnection
             {
@@ -142,18 +142,23 @@ namespace Backend
             };
             sqlConnection.Open();
             var cmd = sqlConnection.CreateCommand();
-            cmd.CommandText = String.Format("select login from [dbo.Users] where number = {0}", accountNumber);
-            string user = (string)cmd.ExecuteScalar();
-            cmd.CommandText = String.Format("insert into [dbo.loans] (user, quanity, interest, installment);" +
-                " values({0}, {1}, {2}, {3})", user, quanity, interest, installment);
+            cmd.CommandText = String.Format("select login from users where number = '{0}'", accountNumber);
+            string login = (string)cmd.ExecuteScalar();
+
+            cmd.CommandText = String.Format("insert into loans (login, quanity, interest, installment) values('{0}', '{1}', '{2}', '{3}');",
+                login, quanity, interest, installment);
             cmd.ExecuteNonQuery();
-            cmd.CommandText = String.Format("select account, name, surname from [dbo.Users] where login = {0};", user);
+
+            cmd.CommandText = String.Format("select account, name, surname from users where login = '{0}';", login);
             var executeReader = cmd.ExecuteReader();
-            float account = executeReader.GetFloat(0);
+            executeReader.Read();
+            double account = (double)executeReader.GetDouble(0);
             string name = executeReader.GetString(1);
             string surname = executeReader.GetString(2);
+            executeReader.Close();
+
             account += quanity;
-            cmd.CommandText = String.Format("update [dbo.Users] set account={0} where login={1};", account, user);
+            cmd.CommandText = String.Format("update users set account='{0}' where login='{1}';", account, login);
             cmd.ExecuteNonQuery();
             sqlConnection.Close();
             return String.Format("201-{0};{1};{2};{3}", accountNumber, account, name, surname);
@@ -161,6 +166,7 @@ namespace Backend
 
         static void Main(string[] args)
         {
+            Console.WriteLine("Start serwera backendowego. Aby zatrzymać wciśnij Escape.");
             var factory = new ConnectionFactory()
             {
                 UserName = "guest",
@@ -168,17 +174,25 @@ namespace Backend
                 HostName = "localhost",
                 VirtualHost = "/"
             };
+            Console.WriteLine("Przygotowywanie kanału");
             using (var connection = factory.CreateConnection())
             using (var channel = connection.CreateModel())
             {
+                channel.ContinuationTimeout = new TimeSpan(0, 2, 0);
+                Console.WriteLine("Przygotowywanie kolejki.");
                 var queue = channel.QueueDeclare("loan_queue", false, false, false, null);
+                Console.WriteLine("Przygotowywanie konsumenta.");
                 var consumer = new EventingBasicConsumer(channel);
                 consumer.Received += Receive;
-
-                while (true)
+                Console.WriteLine("Rozpoczynam konsumowanie.");
+                do
                 {
-                    channel.BasicConsume("rpc_queue", true, consumer);
-                }
+                    Console.WriteLine("Aby zakończyć, kliknij escape.");
+                    while (!Console.KeyAvailable)
+                    {
+                        channel.BasicConsume("loan_queue", true, consumer);
+                    }
+                } while (Console.ReadKey(true).Key != ConsoleKey.Escape);
             }
         }
     }
