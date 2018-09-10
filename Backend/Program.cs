@@ -104,10 +104,12 @@ namespace Backend
             }
             cmd.CommandText = String.Format("select number, account, name, surname from users where login = '{0}';", user);
             var executeReader = cmd.ExecuteReader();
+            executeReader.Read();
             string number = executeReader.GetString(0);
             double account = executeReader.GetFloat(1);
             string name = executeReader.GetString(2);
             string surname = executeReader.GetString(3);
+            executeReader.Close();
             cmd.CommandText = String.Format("update users set account='{0}' where login='{1}';", account, user);
             cmd.ExecuteNonQuery();
             sqlConnection.Close();
@@ -183,14 +185,49 @@ namespace Backend
                 var queue = channel.QueueDeclare("loan_queue", false, false, false, null);
                 Console.WriteLine("Przygotowywanie konsumenta.");
                 var consumer = new EventingBasicConsumer(channel);
-                consumer.Received += Receive;
+                //consumer.Received += Receive;
+                consumer.Received += (model, ea) =>
+                {
+                    var body = ea.Body;
+                    var message = Encoding.UTF8.GetString(body);
+                    var operation = GetOperation(message);
+                    var parameters = GetParameters(message);
+                    Console.WriteLine(String.Format("Otrzymano wiadomosc: {0}", message));
+
+                    string returnString;
+                    switch (operation)
+                    {
+                        case OPERATION_LOAN:
+                            double quanity = double.Parse(parameters[PARAMETER_QUANITY]);
+                            double interest = double.Parse(parameters[PARAMETER_INTEREST]);
+                            double installment = double.Parse(parameters[PARAMETER_INSTALLMENT]);
+                            string accountNumber = parameters[PARAMETER_ACCOUNT_NUMBER];
+                            returnString = LoanService(quanity, interest, installment, accountNumber);
+                            break;
+                        case OPERATION_LOGIN:
+                            string login = parameters[PARAMETER_LOGIN];
+                            string password = parameters[PARAMETER_PASSWORD];
+                            returnString = LoginService(login, password);
+                            break;
+                        default:
+                            returnString = "404";
+                            break;
+                    }
+
+                    Console.WriteLine(String.Format("Zwracam wiadomosc: {0}", returnString));
+
+                    var responseBytes = Encoding.UTF8.GetBytes(returnString);
+                    var replyProps = channel.CreateBasicProperties();
+                    replyProps.CorrelationId = ea.BasicProperties.CorrelationId;
+                    channel.BasicPublish("", (string)ea.BasicProperties.ReplyTo, null, responseBytes);
+                };
                 Console.WriteLine("Rozpoczynam konsumowanie.");
                 do
                 {
                     Console.WriteLine("Aby zakończyć, kliknij escape.");
                     while (!Console.KeyAvailable)
                     {
-                        channel.BasicConsume("loan_queue", true, consumer);
+                        channel.BasicConsume("loan_queue", false, consumer);
                     }
                 } while (Console.ReadKey(true).Key != ConsoleKey.Escape);
             }
