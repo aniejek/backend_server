@@ -22,9 +22,16 @@ namespace Backend
         private const int PARAMETER_INSTALLMENT = 2;
         private const int PARAMETER_ACCOUNT_NUMBER = 3;
 
+        private const string CREATED = "201";
+        private const string PAYMENT_REQUIRED = "403";
+        private const string NOT_FOUND = "404";
+
         private const char OPERATION_SEPARATOR = '-';
         private const string OPERATION_LOGIN = "logowanie";
         private const string OPERATION_LOAN = "pozyczka";
+
+        private const string LOAN_QUEUE = "loan_queue";
+        private const string RESPONSE_QUEUE = "response_queue";
 
         private const int MAX_LOAN = 200000;
         private const double EXPECTED_MONTHLY_INTEREST = 0.01f;
@@ -45,7 +52,7 @@ namespace Backend
             return Tuple.Create(keyAndValue[0], keyAndValue[1]);
         }
 
-        private static void Receive(object model, BasicDeliverEventArgs ea)
+        /*private static void Receive(object model, BasicDeliverEventArgs ea)
         {
             var body = ea.Body;
             var message = Encoding.UTF8.GetString(body);
@@ -79,7 +86,7 @@ namespace Backend
             //var replyProps = model.CreateBasicProperties();
             //replyProps.CorrelationId = ea.BasicProperties.CorrelationId;
             //((Model)model).BasicPublish("", ea.BasicProperties.ReplyTo, replyProps, responseBytes);
-        }
+        }*/
 
         private static string LoginService(string user, string password)
         {
@@ -100,7 +107,7 @@ namespace Backend
             string gottenPassword = (string)cmd.ExecuteScalar();
             if (gottenPassword != password)
             {
-                return "402";
+                return PAYMENT_REQUIRED;
             }
             cmd.CommandText = String.Format("select number, account, name, surname from users where login = '{0}';", user);
             var executeReader = cmd.ExecuteReader();
@@ -113,7 +120,7 @@ namespace Backend
             cmd.CommandText = String.Format("update users set account='{0}' where login='{1}';", account, user);
             cmd.ExecuteNonQuery();
             sqlConnection.Close();
-            return String.Format("201-{0};{1};{2};{3}", number, account, name, surname);
+            return String.Format("{0}-{1};{2};{3};{4}", CREATED, number, account, name, surname);
         }
 
         private static string LoanService(double quanity, double interest, double installment, string accountNumber)
@@ -126,7 +133,7 @@ namespace Backend
                     return TakeLoan(accountNumber, quanity, installment, interest);
                 }
             }
-            return "402";
+            return PAYMENT_REQUIRED;
         }
 
         private static string TakeLoan(string accountNumber, double quanity, double installment, double interest)
@@ -163,7 +170,7 @@ namespace Backend
             cmd.CommandText = String.Format("update users set account='{0}' where login='{1}';", account, login);
             cmd.ExecuteNonQuery();
             sqlConnection.Close();
-            return String.Format("201-{0};{1};{2};{3}", accountNumber, account, name, surname);
+            return String.Format("{0}-{1};{2};{3};{4}", CREATED, accountNumber, account, name, surname);
         }
 
         static void Main(string[] args)
@@ -182,7 +189,7 @@ namespace Backend
             {
                 channel.ContinuationTimeout = new TimeSpan(0, 2, 0);
                 Console.WriteLine("Przygotowywanie kolejki.");
-                var queue = channel.QueueDeclare("loan_queue", false, false, false, null);
+                var queue = channel.QueueDeclare(LOAN_QUEUE, false, false, false, null);
                 Console.WriteLine("Przygotowywanie konsumenta.");
                 var consumer = new EventingBasicConsumer(channel);
                 //consumer.Received += Receive;
@@ -210,7 +217,7 @@ namespace Backend
                             returnString = LoginService(login, password);
                             break;
                         default:
-                            returnString = "404";
+                            returnString = NOT_FOUND;
                             break;
                     }
 
@@ -227,7 +234,7 @@ namespace Backend
                     Console.WriteLine("Aby zakończyć, kliknij escape.");
                     while (!Console.KeyAvailable)
                     {
-                        channel.BasicConsume("loan_queue", false, consumer);
+                        channel.BasicConsume(LOAN_QUEUE, false, consumer);
                     }
                 } while (Console.ReadKey(true).Key != ConsoleKey.Escape);
             }
