@@ -30,7 +30,7 @@ namespace Backend
         private const string OPERATION_LOGIN = "logowanie";
         private const string OPERATION_LOAN = "pozyczka";
 
-        private const string LOAN_QUEUE = "loan_queue";
+        private const string LOAN_QUEUE = "rpc_queue";
         private const string RESPONSE_QUEUE = "response_queue";
 
         private const int MAX_LOAN = 200000;
@@ -113,7 +113,7 @@ namespace Backend
             var executeReader = cmd.ExecuteReader();
             executeReader.Read();
             string number = executeReader.GetString(0);
-            double account = executeReader.GetFloat(1);
+            double account = executeReader.GetDouble(1);
             string name = executeReader.GetString(2);
             string surname = executeReader.GetString(3);
             executeReader.Close();
@@ -175,7 +175,7 @@ namespace Backend
 
         static void Main(string[] args)
         {
-            Console.WriteLine("Start serwera backendowego. Aby zatrzymać wciśnij Escape.");
+            Console.WriteLine("Start serwera backendowego.");
             var factory = new ConnectionFactory()
             {
                 UserName = "guest",
@@ -227,16 +227,18 @@ namespace Backend
                     var replyProps = channel.CreateBasicProperties();
                     replyProps.CorrelationId = ea.BasicProperties.CorrelationId;
                     channel.BasicPublish("", (string)ea.BasicProperties.ReplyTo, null, responseBytes);
+
+                    Console.WriteLine(String.Format("Wyslalem message o ID {0} do kolejki {1}", replyProps.CorrelationId, ea.BasicProperties.ReplyTo));
                 };
                 Console.WriteLine("Rozpoczynam konsumowanie.");
                 do
                 {
-                    Console.WriteLine("Aby zakończyć, kliknij escape.");
+                    Console.WriteLine("Aby zakończyć, przytrzymaj q.");
                     while (!Console.KeyAvailable)
                     {
                         channel.BasicConsume(LOAN_QUEUE, false, consumer);
                     }
-                } while (Console.ReadKey(true).Key != ConsoleKey.Escape);
+                } while (Console.ReadKey(true).Key != ConsoleKey.Q);
             }
         }
     }
