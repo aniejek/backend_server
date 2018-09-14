@@ -23,13 +23,14 @@ namespace Backend
         private const int PARAMETER_ACCOUNT_NUMBER = 3;
 
         private const string CREATED = "201";
-        private const string PAYMENT_REQUIRED = "403";
+        private const string PAYMENT_REQUIRED = "402";
         private const string NOT_FOUND = "404";
 
         private const char OPERATION_SEPARATOR = '-';
         private const string OPERATION_LOGIN = "logowanie";
         private const string OPERATION_LOAN = "pozyczka";
 
+        private const string MAIL_QUEUE = "mail_queue";
         private const string LOAN_QUEUE = "rpc_queue";
         private const string RESPONSE_QUEUE = "response_queue";
 
@@ -123,20 +124,20 @@ namespace Backend
             return String.Format("{0}-{1};{2};{3};{4}", CREATED, number, account, name, surname);
         }
 
-        private static string LoanService(double quanity, double interest, double installment, string accountNumber)
+        private static string LoanService(double quanity, double interest, double installment, string accountNumber, IModel channel)
         {
             if (quanity != 0 && installment != 0 && interest != 0 && !(accountNumber is null))
             {
                 double expected_interest = EXPECTED_MONTHLY_INTEREST * (1 + quanity / MAX_LOAN);
                 if (interest / installment >= expected_interest)
                 {
-                    return TakeLoan(accountNumber, quanity, installment, interest);
+                    return TakeLoan(accountNumber, quanity, installment, interest, channel);
                 }
             }
             return PAYMENT_REQUIRED;
         }
 
-        private static string TakeLoan(string accountNumber, double quanity, double installment, double interest)
+        private static string TakeLoan(string accountNumber, double quanity, double installment, double interest, IModel channel)
         {
             var sqlConnection = new SqlConnection
             {
@@ -170,7 +171,14 @@ namespace Backend
             cmd.CommandText = String.Format("update users set account='{0}' where login='{1}';", account, login);
             cmd.ExecuteNonQuery();
             sqlConnection.Close();
+            sendMail(login, quanity, interest, installment, name, surname, channel);
             return String.Format("{0}-{1};{2};{3};{4}", CREATED, accountNumber, account, name, surname);
+        }
+
+        private static void sendMail(string login, double quanity, double interest, double installment, string name, string surname, IModel channel)
+        {
+            string emailString = String.Format("{0};{1};{2};{3};{4};{5}", login, quanity, interest, installment, name, surname);
+            channel.BasicPublish("", MAIL_QUEUE, null, Encoding.UTF8.GetBytes(emailString));
         }
 
         static void Main(string[] args)
@@ -188,8 +196,10 @@ namespace Backend
             using (var channel = connection.CreateModel())
             {
                 channel.ContinuationTimeout = new TimeSpan(0, 2, 0);
-                Console.WriteLine("Przygotowywanie kolejki.");
-                var queue = channel.QueueDeclare(LOAN_QUEUE, false, false, false, null);
+                Console.WriteLine("Przygotowywanie kolejki mailowej.");
+                var email_queue = channel.QueueDeclare(MAIL_QUEUE, false, false, false, null);
+                Console.WriteLine("Przygotowywanie kolejki zlecen.");
+                var loan_queue = channel.QueueDeclare(LOAN_QUEUE, false, false, false, null);
                 Console.WriteLine("Przygotowywanie konsumenta.");
                 var consumer = new EventingBasicConsumer(channel);
                 //consumer.Received += Receive;
@@ -200,7 +210,6 @@ namespace Backend
                     var operation = GetOperation(message);
                     var parameters = GetParameters(message);
                     Console.WriteLine(String.Format("Otrzymano wiadomosc: {0}", message));
-
                     string returnString;
                     switch (operation)
                     {
@@ -209,7 +218,7 @@ namespace Backend
                             double interest = double.Parse(parameters[PARAMETER_INTEREST]);
                             double installment = double.Parse(parameters[PARAMETER_INSTALLMENT]);
                             string accountNumber = parameters[PARAMETER_ACCOUNT_NUMBER];
-                            returnString = LoanService(quanity, interest, installment, accountNumber);
+                            returnString = LoanService(quanity, interest, installment, accountNumber, channel);
                             break;
                         case OPERATION_LOGIN:
                             string login = parameters[PARAMETER_LOGIN];
@@ -226,19 +235,13 @@ namespace Backend
                     var responseBytes = Encoding.UTF8.GetBytes(returnString);
                     var replyProps = channel.CreateBasicProperties();
                     replyProps.CorrelationId = ea.BasicProperties.CorrelationId;
-                    channel.BasicPublish("", (string)ea.BasicProperties.ReplyTo, null, responseBytes);
+                    channel.BasicPublish("", (string)ea.BasicProperties.ReplyTo, replyProps, responseBytes);
 
                     Console.WriteLine(String.Format("Wyslalem message o ID {0} do kolejki {1}", replyProps.CorrelationId, ea.BasicProperties.ReplyTo));
                 };
                 Console.WriteLine("Rozpoczynam konsumowanie.");
-                do
-                {
-                    Console.WriteLine("Aby zakończyć, przytrzymaj q.");
-                    while (!Console.KeyAvailable)
-                    {
-                        channel.BasicConsume(LOAN_QUEUE, false, consumer);
-                    }
-                } while (Console.ReadKey(true).Key != ConsoleKey.Q);
+                channel.BasicConsume(LOAN_QUEUE, true, consumer);
+                while (Console.ReadKey().Key != ConsoleKey.Q) ;
             }
         }
     }
