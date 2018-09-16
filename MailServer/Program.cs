@@ -38,7 +38,7 @@ namespace MailServer
             client.EnableSsl = true;
             client.Timeout = 100000;
             client.UseDefaultCredentials = false;
-            client.Credentials = new NetworkCredential("aleksy.dobrodziejow@onet.pl", "On4@Po6$");
+            client.Credentials = new NetworkCredential("aleksy.dobrodziejow@onet.pl", "******");
             Console.WriteLine("Przygotowywanie ConnectionFactory.");
             var factory = new ConnectionFactory()
             {
